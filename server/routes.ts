@@ -4,7 +4,14 @@ import { storage } from "./storage";
 import { insertDocumentSchema, insertChatSchema } from "@shared/schema";
 import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 
-const bedrock = new BedrockRuntimeClient({ region: "us-east-1" });
+const bedrock = new BedrockRuntimeClient({ 
+  region: "us-east-1",
+  // Ensure credentials are properly loaded from env vars
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!
+  }
+});
 
 export async function registerRoutes(app: Express) {
   // Document routes
@@ -33,50 +40,80 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  // Chat routes
+  // Updated chat routes with better error handling
   app.post("/api/chat", async (req, res) => {
     try {
       const { question } = req.body;
+      if (!question?.trim()) {
+        return res.status(400).json({ error: "Question is required" });
+      }
 
       // Get relevant documents for context
       const docs = await storage.getDocuments();
+      if (!docs.length) {
+        return res.status(400).json({ error: "No documents available for context" });
+      }
+
       const context = docs.map(d => d.content).join("\n");
 
-      // Call Bedrock with correct Claude API format
-      const response = await bedrock.send(new InvokeModelCommand({
-        modelId: "anthropic.claude-v2",
-        contentType: "application/json",
-        accept: "application/json",
-        body: JSON.stringify({
-          anthropic_version: "bedrock-2023-05-31",
-          max_tokens: 500,
-          messages: [
-            {
+      // Try Claude first, fall back to other models if needed
+      const modelConfigs = [
+        {
+          modelId: "anthropic.claude-instant-v1",
+          formatRequest: () => ({
+            anthropic_version: "bedrock-2023-05-31",
+            max_tokens: 500,
+            messages: [{
               role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: `Context: ${context}\n\nQuestion: ${question}\n\nAnswer the question based on the context provided. If the answer cannot be found in the context, say so.`
-                }
-              ]
-            }
-          ]
-        })
-      }));
+              content: [{
+                type: "text",
+                text: `Context: ${context}\n\nQuestion: ${question}\n\nAnswer the question based on the context provided. If the answer cannot be found in the context, say so.`
+              }]
+            }]
+          }),
+          parseResponse: (body: any) => body.messages[0].content[0].text
+        }
+      ];
 
-      const responseBody = JSON.parse(new TextDecoder().decode(response.body));
-      const answer = responseBody.messages[0].content[0].text;
+      let lastError = null;
+      for (const config of modelConfigs) {
+        try {
+          const response = await bedrock.send(new InvokeModelCommand({
+            modelId: config.modelId,
+            contentType: "application/json",
+            accept: "application/json",
+            body: JSON.stringify(config.formatRequest())
+          }));
 
-      const chat = await storage.createChat({
-        question,
-        answer,
-        context: docs.map(d => ({ id: d.id, title: d.title })),
+          const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+          const answer = config.parseResponse(responseBody);
+
+          const chat = await storage.createChat({
+            question,
+            answer,
+            context: docs.map(d => ({ id: d.id, title: d.title })),
+          });
+
+          return res.json(chat);
+        } catch (error: any) {
+          console.error(`Error with model ${config.modelId}:`, error);
+          lastError = error;
+          // Continue to next model if available
+        }
+      }
+
+      // If we get here, all models failed
+      console.error('All models failed. Last error:', lastError);
+      res.status(500).json({ 
+        error: "Failed to process chat",
+        details: lastError?.message || "Unknown error"
       });
-
-      res.json(chat);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Chat API Error:', error);
-      res.status(500).json({ error: "Failed to process chat" });
+      res.status(500).json({ 
+        error: "Failed to process chat",
+        details: error?.message || "Unknown error"
+      });
     }
   });
 
