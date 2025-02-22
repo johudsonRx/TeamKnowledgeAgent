@@ -37,23 +37,35 @@ export async function registerRoutes(app: Express) {
   app.post("/api/chat", async (req, res) => {
     try {
       const { question } = req.body;
-      
+
       // Get relevant documents for context
       const docs = await storage.getDocuments();
       const context = docs.map(d => d.content).join("\n");
 
-      // Call Bedrock
-      const prompt = `Context: ${context}\n\nQuestion: ${question}\n\nAnswer:`;
+      // Call Bedrock with correct Claude API format
       const response = await bedrock.send(new InvokeModelCommand({
         modelId: "anthropic.claude-v2",
+        contentType: "application/json",
+        accept: "application/json",
         body: JSON.stringify({
-          prompt,
+          anthropic_version: "bedrock-2023-05-31",
           max_tokens: 500,
-          temperature: 0.7,
-        }),
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: `Context: ${context}\n\nQuestion: ${question}\n\nAnswer the question based on the context provided. If the answer cannot be found in the context, say so.`
+                }
+              ]
+            }
+          ]
+        })
       }));
 
-      const answer = JSON.parse(response.body.toString()).completion;
+      const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+      const answer = responseBody.messages[0].content[0].text;
 
       const chat = await storage.createChat({
         question,
@@ -63,6 +75,7 @@ export async function registerRoutes(app: Express) {
 
       res.json(chat);
     } catch (error) {
+      console.error('Chat API Error:', error);
       res.status(500).json({ error: "Failed to process chat" });
     }
   });
