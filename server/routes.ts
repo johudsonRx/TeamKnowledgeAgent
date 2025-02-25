@@ -1,19 +1,36 @@
 import type { Express } from "express";
 import { createServer } from "http";
-import { storage } from "./storage";
+import { storage } from "./storage/index";
 import { insertDocumentSchema, insertChatSchema } from "@shared/schema";
 import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
+import path from "path";
+import express from "express";
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+import dotenv from 'dotenv';
+import { getDocuments } from "./storage/index";
+dotenv.config();
 
 const bedrock = new BedrockRuntimeClient({ 
-  region: "us-east-1",
-  // Ensure credentials are properly loaded from env vars
+  region: process.env.AWS_REGION || "us-east-1",
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!
   }
 });
 
+// Add some error handling
+if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
+  console.error('AWS credentials are not properly configured');
+}
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 export async function registerRoutes(app: Express) {
+  // Serve static files from the client build directory
+  app.use(express.static(path.join(__dirname, "../client/dist")));
+
   // Document routes
   app.post("/api/documents", async (req, res) => {
     try {
@@ -25,9 +42,14 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/documents", async (_req, res) => {
-    const docs = await storage.getDocuments();
-    res.json(docs);
+  app.get("/api/documents", async (req, res) => {
+    try {
+      const documents = await getDocuments();
+      res.json(documents);
+    } catch (error) {
+      console.error('Error fetching documents:', error);
+      res.status(500).json({ error: 'Failed to fetch documents' });
+    }
   });
 
   app.delete("/api/documents/:id", async (req, res) => {
@@ -40,7 +62,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  // Updated chat routes with better error handling
+  // Updated chat route with better error handling and model selection
   app.post("/api/chat", async (req, res) => {
     try {
       const { question } = req.body;
@@ -50,34 +72,25 @@ export async function registerRoutes(app: Express) {
 
       // Get relevant documents for context
       const docs = await storage.getDocuments();
-      if (!docs.length) {
-        return res.status(400).json({ error: "No documents available for context" });
-      }
+      const context = docs.length ? docs.map(d => d.content).join("\n") : "";
 
-      const context = docs.map(d => d.content).join("\n");
-
-      // Try Claude first, fall back to other models if needed
+      // Try multiple Bedrock models
       const modelConfigs = [
         {
-          modelId: "anthropic.claude-instant-v1",
+          modelId: "mistral.mistral-7b-instruct-v0:2",
           formatRequest: () => ({
-            anthropic_version: "bedrock-2023-05-31",
+            prompt: `Context: ${context}\n\nQuestion: ${question}\n\nAnswer the question based on the context provided. If the answer cannot be found in the context, say so.`,
             max_tokens: 500,
-            messages: [{
-              role: "user",
-              content: [{
-                type: "text",
-                text: `Context: ${context}\n\nQuestion: ${question}\n\nAnswer the question based on the context provided. If the answer cannot be found in the context, say so.`
-              }]
-            }]
+            temperature: 0.7,
           }),
-          parseResponse: (body: any) => body.messages[0].content[0].text
+          parseResponse: (body: any) => body.completion
         }
       ];
 
       let lastError = null;
       for (const config of modelConfigs) {
         try {
+          console.log(`Trying model: ${config.modelId}`);
           const response = await bedrock.send(new InvokeModelCommand({
             modelId: config.modelId,
             contentType: "application/json",
@@ -104,6 +117,23 @@ export async function registerRoutes(app: Express) {
 
       // If we get here, all models failed
       console.error('All models failed. Last error:', lastError);
+      if (lastError?.message?.includes('AccessDeniedException')) {
+        return res.status(401).json({
+          error: "AWS Bedrock Access Denied",
+          details: "Please ensure your AWS credentials have access to Bedrock service and the specified models."
+        });
+      } else if (lastError?.message?.includes('ValidationException')) {
+        return res.status(400).json({
+          error: "Invalid Request to Bedrock",
+          details: "The request format was invalid. This might be due to an unsupported model configuration."
+        });
+      } else if (lastError?.message?.includes('ThrottlingException')) {
+        return res.status(429).json({
+          error: "Rate Limited",
+          details: "Too many requests to Bedrock. Please try again later."
+        });
+      }
+
       res.status(500).json({ 
         error: "Failed to process chat",
         details: lastError?.message || "Unknown error"
@@ -120,6 +150,11 @@ export async function registerRoutes(app: Express) {
   app.get("/api/chats", async (_req, res) => {
     const chats = await storage.getChats();
     res.json(chats);
+  });
+
+  // Catch-all route to serve the frontend for any non-API routes
+  app.get("*", (_req, res) => {
+    res.sendFile(path.join(__dirname, "../client/dist/index.html"));
   });
 
   const httpServer = createServer(app);

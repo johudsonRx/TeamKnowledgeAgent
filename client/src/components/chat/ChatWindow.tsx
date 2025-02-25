@@ -32,10 +32,18 @@ export default function ChatWindow() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('Submit triggered with question:', question);
+    
     if (question.trim()) {
+      console.log('Attempting to send chat mutation...');
       chatMutation.mutate(question);
+      console.log('Chat mutation sent');
+    } else {
+      console.log('Question was empty or only whitespace');
     }
   };
+
+  console.log()
 
   return (
     <div className="flex flex-col h-[calc(100vh-12rem)] bg-card rounded-lg p-4">

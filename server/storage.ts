@@ -1,70 +1,97 @@
 import { 
-  type Document, type InsertDocument,
-  type Chat, type InsertChat 
-} from "@shared/schema";
+  DynamoDBDocumentClient, 
+  PutCommand, 
+  ScanCommand,
+  DeleteCommand,
+  QueryCommand 
+} from "@aws-sdk/lib-dynamodb";
+import type { InsertDocument, InsertChat } from '@shared/schema';
+import { MongoClient } from 'mongodb';
 
-export interface IStorage {
-  // Document operations
-  createDocument(doc: InsertDocument): Promise<Document>;
-  getDocuments(): Promise<Document[]>;
-  getDocument(id: number): Promise<Document | undefined>;
-  deleteDocument(id: number): Promise<void>;
-  
-  // Chat operations
-  createChat(chat: InsertChat): Promise<Chat>;
-  getChats(): Promise<Chat[]>;
-}
-
-export class MemStorage implements IStorage {
-  private documents: Map<number, Document>;
-  private chats: Map<number, Chat>;
-  private documentId: number;
-  private chatId: number;
-
-  constructor() {
-    this.documents = new Map();
-    this.chats = new Map();
-    this.documentId = 1;
-    this.chatId = 1;
+const client = new DynamoDBClient({
+  region: process.env.AWS_REGION || "us-east-1",
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!
   }
+});
 
-  async createDocument(doc: InsertDocument): Promise<Document> {
-    const id = this.documentId++;
-    const document: Document = {
-      id,
-      uploadedAt: new Date(),
+const docClient = DynamoDBDocumentClient.from(client);
+
+export const storage = {
+  async createDocument(doc: InsertDocument) {
+    const item = {
       ...doc,
+      id: Date.now().toString(), // Simple ID generation
+      uploadedAt: new Date().toISOString(),
+      type: 'DOCUMENT' // To distinguish from chats
     };
-    this.documents.set(id, document);
-    return document;
-  }
 
-  async getDocuments(): Promise<Document[]> {
-    return Array.from(this.documents.values());
-  }
+    await docClient.send(new PutCommand({
+      TableName: "KnowledgeBase",
+      Item: item
+    }));
 
-  async getDocument(id: number): Promise<Document | undefined> {
-    return this.documents.get(id);
-  }
+    return item;
+  },
 
-  async deleteDocument(id: number): Promise<void> {
-    this.documents.delete(id);
-  }
+  async getDocuments() {
+    try {
+      const client = new MongoClient('mongodb://localhost:27017/knowledge-base');
+      await client.connect();
+      
+      const db = client.db('knowledge-base');
+      const collection = db.collection('documents');
+      
+      const documents = await collection.find({}).toArray();
+      
+      await client.close();
+      return documents;
+      
+    } catch (error) {
+      console.error('Error fetching documents from MongoDB:', error);
+      throw error;
+    }
+  },
 
-  async createChat(chat: InsertChat): Promise<Chat> {
-    const id = this.chatId++;
-    const chatEntry: Chat = {
-      id,
-      createdAt: new Date(),
+  async deleteDocument(id: string) {
+    await docClient.send(new DeleteCommand({
+      TableName: "KnowledgeBase",
+      Key: {
+        id,
+        type: "DOCUMENT"
+      }
+    }));
+  },
+
+  async createChat(chat: InsertChat) {
+    const item = {
       ...chat,
+      id: Date.now().toString(),
+      createdAt: new Date().toISOString(),
+      type: 'CHAT'
     };
-    this.chats.set(id, chatEntry);
-    return chatEntry;
-  }
 
-  async getChats(): Promise<Chat[]> {
-    return Array.from(this.chats.values());
-  }
-}
+    await docClient.send(new PutCommand({
+      TableName: "KnowledgeBase",
+      Item: item
+    }));
 
-export const storage = new MemStorage();
+    return item;
+  },
+
+  async getChats() {
+    const response = await docClient.send(new QueryCommand({
+      TableName: "KnowledgeBase",
+      KeyConditionExpression: "#type = :type",
+      ExpressionAttributeNames: {
+        "#type": "type"
+      },
+      ExpressionAttributeValues: {
+        ":type": "CHAT"
+      }
+    }));
+
+    return response.Items || [];
+  }
+};
