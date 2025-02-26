@@ -57,7 +57,7 @@ The frontend is built with:
 The backend uses:
 - Express.js
 - Amazon Bedrock for AI/ML
-- In-memory storage (can be extended to use a database)
+- Local mongo db instance, document db instance on AWS in higher environments
 
 ## Adding Documents
 1. Navigate to the home page
@@ -69,3 +69,12 @@ The backend uses:
 1. Go to the Chat page
 2. Type your question
 3. The AI will respond using the context from your uploaded documents
+
+## TODO:
+1. Add more customization to agent prompts
+2. Move route.ts logic to modular controller and helper file structure
+3. Add support for other file/document formats
+4. Configure a deployment with AWS native services
+5. Add a threads section to the chat UI (more of a future enhancement)
+6. Bring up a reference list section for documents similar to how perplexity does when you prmopt it and it returns videos and links that back up its answers (more of a future enhancement)
+7. Consider having support for multiple LLMs based on the document type. For example: You want context on a code file -> switch to a model like claude 3.7 for explaining code. 

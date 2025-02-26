@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import dotenv from 'dotenv';
+import { getDB } from "./connectToDB";
 dotenv.config();
 
 const app = express();
@@ -39,7 +40,11 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  const server = await registerRoutes(app);
+  try {
+    // Initialize MongoDB connection
+    await getDB();
+    
+    const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
@@ -58,9 +63,13 @@ app.use((req, res, next) => {
     serveStatic(app);
   }
 
-  // ALWAYS serve the app on port 5000
-  // this serves both the API and the client
-  app.listen(6000, 'localhost', () => {
-    console.log(`Server running on http://localhost:6000`);
-  });
+    // ALWAYS serve the app on port 5000
+    // this serves both the API and the client
+    app.listen(6000, 'localhost', () => {
+      console.log(`Server running on http://localhost:6000`);
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
 })();
