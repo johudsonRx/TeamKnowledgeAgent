@@ -13,7 +13,8 @@
     "dev:server": "tsx watch --inspect server/index.ts",
     "test:docdb": "tsx server/scripts/test-docdb-connection.ts",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
-    "vpn:connect": "./scripts/connect-vpn.sh"
+    "vpn:connect": "./scripts/connect-vpn.sh",
+    "debug": "node --inspect -r ts-node/register server/index.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.751.0",
@@ -105,8 +106,9 @@
     "nodemon": "^3.1.9",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.14",
+    "ts-node": "^10.9.2",
     "tsx": "^4.19.3",
-    "typescript": "5.6.3",
+    "typescript": "^5.6.3",
     "vite": "^5.4.14"
   },
   "optionalDependencies": {

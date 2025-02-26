@@ -32,5 +32,11 @@ export const insertChatSchema = createInsertSchema(chats).pick({
 
 export type Document = typeof documents.$inferSelect;
 export type InsertDocument = z.infer<typeof insertDocumentSchema>;
-export type Chat = typeof chats.$inferSelect;
+export interface Chat {
+  id: string;
+  question: string;
+  answer: string;
+  createdAt: Date;
+  documentRefs: Array<{ id: string; title: string }>;
+}
 export type InsertChat = z.infer<typeof insertChatSchema>;

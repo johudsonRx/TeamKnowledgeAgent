@@ -14,8 +14,11 @@ export default function ChatWindow() {
 
   const chatMutation = useMutation({
     mutationFn: async (question: string) => {
+      console.log('Sending question:', question);
       const res = await apiRequest("POST", "/api/chat", { question });
-      return res.json() as Promise<Chat>;
+      const data = await res.json();
+      console.log('Received response:', data);
+      return data as Chat;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/chats"] });
