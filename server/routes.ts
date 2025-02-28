@@ -1,16 +1,17 @@
 import type { Express } from "express";
 import { createServer } from "http";
-import { storage } from "./storage/index";
-import { insertDocumentSchema, insertChatSchema } from "../shared/schema";
+import { storage } from "./storage/index.js";
+import { insertDocumentSchema, insertChatSchema } from "../shared/schema.js";
 import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 import path from "path";
 import express from "express";
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import dotenv from 'dotenv';
-import { getDB } from './connectToDB';
-import { log } from './vite';  // Import the logger
+import { getDB } from './connectToDB.js';
+import { log } from './vite.js';  // Import the logger
 import { z } from 'zod';
+import { ObjectId } from 'mongodb';  // Add this import
 
 dotenv.config();
 
@@ -69,11 +70,11 @@ export async function registerRoutes(app: Express) {
         // Add any other fields you need
       });
 
-      log('✅ Document created:', result.insertedId);
-      res.json({ success: true, documentId: result.insertedId });
+      log('✅ Document created:', result.insertedId.toString());
+      res.json({ success: true, documentId: result.insertedId.toString() });
       
     } catch (error) {
-      log('❌ Error uploading document:', error);
+      log('❌ Error uploading document:', error instanceof Error ? error.message : String(error));
       res.status(500).json({ error: 'Failed to upload document' });
     }
   });
@@ -86,14 +87,14 @@ export async function registerRoutes(app: Express) {
       log(`📚 Retrieved ${documents.length} documents`);
       res.json(documents);
     } catch (error) {
-      log('❌ Error fetching documents:', error);
+      log('❌ Error fetching documents:', error instanceof Error ? error.message : String(error));
       res.status(500).json({ error: 'Failed to fetch documents' });
     }
   });
 
   app.delete("/api/documents/:id", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = new ObjectId(req.params.id);  // Convert to ObjectId
       const db = await getDB();
       const collection = db.collection('documents');
       const result = await collection.deleteOne({ _id: id });
@@ -164,10 +165,10 @@ export async function registerRoutes(app: Express) {
       });
 
     } catch (error) {
-      log('❌ Chat error:', error);
+      log('❌ Chat error:', error instanceof Error ? error.message : String(error));
       res.status(500).json({ 
         error: 'Failed to process chat',
-        details: error.toString()
+        details: error instanceof Error ? error.message : String(error)
       });
     }
   });

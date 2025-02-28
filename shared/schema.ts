@@ -22,6 +22,9 @@ export const insertDocumentSchema = createInsertSchema(documents).pick({
   title: true,
   content: true,
   vectorId: true,
+}).extend({
+  mimeType: z.string(),
+  type: z.enum(['PDF', 'WORD', 'CODE', 'EXCEL', 'TEXT'])
 });
 
 export const insertChatSchema = createInsertSchema(chats).pick({

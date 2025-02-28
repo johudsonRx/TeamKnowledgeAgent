@@ -2,7 +2,7 @@ import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const connectionString = 'mongodb://127.0.0.1:27017/knowledge-base';
+const connectionString = process.env.MONGODB_URI || 'mongodb://localhost:27017/knowledge-base';
 let client: MongoClient | null = null;
 
 export async function getMongoClient() {
