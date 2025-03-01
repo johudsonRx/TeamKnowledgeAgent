@@ -1,26 +1,58 @@
-import { MongoClient } from 'mongodb';
+import { MongoClient, MongoClientOptions } from 'mongodb';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import { log } from './vite.js';  // Add this import
 dotenv.config();
 
-const connectionString = process.env.MONGODB_URI || 'mongodb://localhost:27017/knowledge-base';
 let client: MongoClient | null = null;
 
+// Debug logging
+log(`🔧 Environment Check:
+  NODE_ENV: ${process.env.NODE_ENV}
+  isProd: ${process.env.NODE_ENV && process.env.NODE_ENV.toLowerCase() === 'production'}
+  MONGODB_URI: ${process.env.MONGODB_URI ? '[CONFIGURED]' : '[NOT SET]'}
+  Type of NODE_ENV: ${typeof process.env.NODE_ENV}
+`);
+
+const isProd = process.env.NODE_ENV && 
+  process.env.NODE_ENV.toLowerCase() === 'production';
+const connectionString = isProd 
+  ? process.env.MONGODB_URI 
+  : 'mongodb://127.0.0.1:27017/knowledge-base';
+
+if (!connectionString) {
+  throw new Error('MONGODB_URI is required in production');
+}
+
 export async function getMongoClient() {
-  if (!client) {
-    try {
-      client = new MongoClient(connectionString, {
+  if (isProd && !process.env.MONGODB_URI) {
+    throw new Error('MONGODB_URI not defined in production');
+  }
+
+  // Configure options based on environment
+  const options: MongoClientOptions = isProd 
+    ? {
+        tls: true,
+        tlsCAFile: './rds-combined-ca-bundle.pem',
+        retryWrites: false
+      }
+    : {
         serverSelectionTimeoutMS: 5000,
         family: 4,  // Force IPv4
         directConnection: true  // Connect directly to the server
-      });
-      await client.connect();
-      console.log('Connected to MongoDB');
-    } catch (error) {
-      console.error('MongoDB connection error:', error);
-      throw error;
-    }
+          // Local development options (if any needed)
+      };
+
+  const client = new MongoClient(connectionString!, options);
+
+  try {
+    await client.connect();
+    console.log(`Connected to MongoDB in ${isProd ? 'production' : 'development'} mode`);
+    return client;
+  } catch (error) {
+    console.error('MongoDB connection error:', error);
+    throw error;
   }
-  return client;
 }
 
 export async function getDB() {
