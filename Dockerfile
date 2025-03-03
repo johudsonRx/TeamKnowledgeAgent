@@ -1,5 +1,5 @@
 # Base image
-FROM node:18
+FROM node:20-slim
 
 # Install curl
 RUN apt-get update && apt-get install -y curl
@@ -10,28 +10,28 @@ WORKDIR /app
 # Download the certificate
 RUN curl -o /app/global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 
-# Copy package files and config
-COPY package*.json ./
-COPY tsconfig.json ./
-COPY vite.config.ts ./
-COPY theme.json ./
+# First, copy all source files
+COPY . .
 
-# Copy source code
-COPY server ./server
-COPY shared ./shared
-COPY client ./client
-
-# Update MongoDB connection options to use the correct path
-RUN sed -i 's|tlsCAFile: ./rds-combined-ca-bundle.pem|tlsCAFile: /app/global-bundle.pem|' server/connectToDB.ts
-
-# Install dependencies
+# Then install dependencies in each directory
 RUN npm install
+RUN cd client && npm install
+RUN cd server && npm install
 
-# Build TypeScript
-RUN npm run build
+# Build the client
+RUN cd client && npm run build
+
+# Create public directory and move the built client files
+RUN mkdir -p /app/server/public && \
+    mv client/dist/* /app/server/public/
+
+# Verify the files exist
+RUN ls -la /app/server/public/
 
 # Expose port
+# Add Vite's default port
 EXPOSE 6000
+EXPOSE 5173  
 
-# Start server
-CMD ["npm", "run", "dev:server"] 
+# Start server in production mode
+CMD ["npm", "run", "dev:all"] 

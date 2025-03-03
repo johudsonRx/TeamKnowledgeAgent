@@ -33,7 +33,7 @@ export async function getMongoClient() {
   const options: MongoClientOptions = isProd 
     ? {
         tls: true,
-        tlsCAFile: './rds-combined-ca-bundle.pem',
+        tlsCAFile: '/app/global-bundle.pem',
         retryWrites: false
       }
     : {
