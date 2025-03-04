@@ -151,4 +151,8 @@ aws ecs create-service \
 5. Add a threads section to the chat UI (more of a future enhancement)
 6. Bring up a reference list section for documents similar to how perplexity does when you prmopt it and it returns videos and links that back up its answers (more of a future enhancement)
 7. Consider having support for multiple LLMs based on the document type. For example: You want context on a code file -> switch to a model like claude 3.7 for explaining code. 
-
+8. Decide how to make the document search more contextualized. A few options to consider:
+    -Add vector embeddings for semantic search
+    -Only include relevant documents in the context
+    -Use a chunking strategy for large documents
+    -Add metadata for better context
