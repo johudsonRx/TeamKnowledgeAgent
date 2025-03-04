@@ -63,15 +63,23 @@ export async function registerRoutes(app: Express) {
       const db = await getDB();
       const collection = db.collection('documents');
       
-      // Insert the document
+      // Make sure to include a valid date
       const result = await collection.insertOne({
         content: req.body.content,
-        createdAt: new Date(),
-        // Add any other fields you need
+        createdAt: new Date().toISOString(),  // Store as ISO string for consistency
+        title: req.body.title || 'Untitled Document'
       });
 
-      log('✅ Document created:', result.insertedId.toString());
-      res.json({ success: true, documentId: result.insertedId.toString() });
+      res.json({ 
+        success: true, 
+        documentId: result.insertedId,
+        document: {
+          id: result.insertedId,
+          content: req.body.content,
+          createdAt: new Date().toISOString(),
+          title: req.body.title || 'Untitled Document'
+        }
+      });
       
     } catch (error) {
       log('❌ Error uploading document:', error instanceof Error ? error.message : String(error));
@@ -92,19 +100,33 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.delete("/api/documents/:id", async (req, res) => {
+  app.delete('/api/documents/:id', async (req, res) => {
     try {
-      const id = new ObjectId(req.params.id);  // Convert to ObjectId
+      const documentId = req.params.id;
+      
+      // Validate that we have a document ID
+      if (!documentId) {
+        return res.status(400).json({ error: 'Document ID is required' });
+      }
+      
+      // Validate that the ID is a valid ObjectId
+      if (!ObjectId.isValid(documentId)) {
+        return res.status(400).json({ error: 'Invalid document ID format' });
+      }
+
       const db = await getDB();
       const collection = db.collection('documents');
-      const result = await collection.deleteOne({ _id: id });
+      
+      const result = await collection.deleteOne({ _id: new ObjectId(documentId) });
+      
       if (result.deletedCount === 0) {
-        res.status(404).json({ error: "Document not found" });
-      } else {
-        res.status(204).send();
+        return res.status(404).json({ error: 'Document not found' });
       }
+      
+      res.json({ success: true });
     } catch (error) {
-      res.status(404).json({ error: "Document not found" });
+      console.error('Delete error:', error);
+      res.status(500).json({ error: 'Failed to delete document' });
     }
   });
 

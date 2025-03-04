@@ -6,7 +6,6 @@ export default function MessageList() {
   const { data: chats, isLoading, error } = useQuery({
     queryKey: ["/api/chats"],
     queryFn: async () => {
-      debugger;
       const res = await apiRequest("GET", "/api/chats");
       const data = await res.json();
       console.log('Chat data:', data);
