@@ -11,3 +11,10 @@
     @apply font-sans antialiased bg-background text-foreground;
   }
 }
+
+:root {
+  --background: 0 0% 100%;    /* white */
+  --border: 220 13% 91%;      /* gray */
+  --foreground: 222.2 84% 4.9%;  /* Add this line for text color */
+  /* Add other CSS variables you need */
+}

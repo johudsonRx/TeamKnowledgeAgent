@@ -4,6 +4,12 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+task-definition.json
+deploy.sh
+scripts/register-task.sh
+scripts/deploy.sh
+ecs-task-role.json
+iam-role.json
 
 # Environment variables
 .env

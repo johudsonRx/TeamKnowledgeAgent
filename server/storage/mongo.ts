@@ -1,12 +1,8 @@
 import { ObjectId } from "mongodb";
-import type { Document, Chat } from "./types";
-import { getDB } from "../connectToDB";
+import type { Document, Chat } from "./types.js";
+import { getDB } from "../connectToDB.js";
 
 export const mongoStorage = {
-  async connect() {
-    await client.connect();
-  },
-
   async createDocument(doc: Document) {
     const db = await getDB();
     const result = await db.collection("documents").insertOne(doc);

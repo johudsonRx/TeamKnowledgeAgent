@@ -1,8 +1,8 @@
 import express, { type Request, Response, NextFunction } from "express";
-import { registerRoutes } from "./routes";
-import { setupVite, serveStatic, log } from "./vite";
+import { registerRoutes } from "./routes.js";
+import { setupVite, serveStatic, log } from "./vite.js";
 import dotenv from 'dotenv';
-import { getDB } from "./connectToDB";
+import { getDB } from "./connectToDB.js";
 dotenv.config();
 
 const app = express();
@@ -65,8 +65,8 @@ app.use((req, res, next) => {
 
     // ALWAYS serve the app on port 5000
     // this serves both the API and the client
-    app.listen(6000, 'localhost', () => {
-      console.log(`Server running on http://localhost:6000`);
+    app.listen(6000, '0.0.0.0', () => {
+      console.log('Server running on http://0.0.0.0:6000');
     });
   } catch (error) {
     console.error('Failed to start server:', error);

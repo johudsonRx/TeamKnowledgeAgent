@@ -46,20 +46,20 @@ export default function DocumentList() {
       <CardContent>
         <div className="space-y-4">
           {documents?.map((doc) => (
-            <div
-              key={doc.id}
+           <div
+              key={doc._id}
               className="flex items-center justify-between p-4 bg-muted rounded-lg"
             >
               <div>
                 <h3 className="font-medium">{doc.title}</h3>
                 <p className="text-sm text-muted-foreground">
-                  Uploaded: {new Date(doc.uploadedAt).toLocaleDateString()}
+                  Uploaded: {doc.uploadedAt}
                 </p>
               </div>
               <Button
                 variant="destructive"
                 size="icon"
-                onClick={() => deleteMutation.mutate(doc.id)}
+                onClick={() => deleteMutation.mutate(doc._id)}
                 disabled={deleteMutation.isPending}
               >
                 <Trash2 className="h-4 w-4" />

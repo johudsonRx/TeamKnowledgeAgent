@@ -1,13 +1,9 @@
-import { s3Storage } from "./s3";
-import { mongoStorage } from "./mongo";
-import type { InsertDocument, InsertChat } from "@shared/schema";
-import { processDocument } from "../utils/documentProcessor";
+import { s3Storage } from "./s3.js";
+import { mongoStorage } from "./mongo.js";
+import type { InsertDocument, InsertChat } from "../../shared/schema.js";
+import { processDocument } from "../utils/documentProcessor.js";
 
 export const storage = {
-  async initialize() {
-    await mongoStorage.connect();
-  },
-
   async createDocument(doc: InsertDocument) {
     // Generate S3 key
     const s3Key = `documents/${Date.now()}-${doc.title}`;
@@ -52,7 +48,8 @@ export const storage = {
     const chatDoc = {
       ...chat,
       id: Date.now().toString(),
-      createdAt: new Date()
+      createdAt: new Date(),
+      documentRefs: []
     };
     return mongoStorage.createChat(chatDoc);
   },

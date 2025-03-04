@@ -1,5 +1,5 @@
 import { MongoClient, ObjectId } from "mongodb";
-import type { Document, Chat } from "./types";
+import type { Document, Chat } from "./types.js";
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';

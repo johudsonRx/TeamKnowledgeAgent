@@ -1,4 +1,4 @@
-import { docdbStorage } from '../storage/documentdb';
+import { docdbStorage } from '../storage/documentdb.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
