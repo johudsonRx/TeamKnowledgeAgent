@@ -13,6 +13,8 @@ import { log } from './vite.js';  // Import the logger
 import { z } from 'zod';
 import { ObjectId } from 'mongodb';  // Add this import
 import { detectPII } from './utils/piiDetection.js';
+import { generateEmbedding, cosineSimilarity, testSimilarity, type VectorizedChunk, vectorizeChunks } from './utils/vectorization.js';
+import { chunkDocument } from "./utils/documentChunking.js";
 
 dotenv.config();
 
@@ -52,39 +54,41 @@ export async function registerRoutes(app: Express) {
   // Document routes
   app.post("/api/documents", async (req, res) => {
     try {
-      // Check for PII before processing
-      // await detectPII(req.body.content);
-      
-      // Log the incoming request body
-      log('📝 Received document data:', req.body);
-
-      // Validate the document data
-      if (!req.body || !req.body.content) {
-        log('❌ Invalid document data received');
-        return res.status(400).json({ error: 'Invalid document data' });
-      }
-
+      const { content, title } = req.body;
       const db = await getDB();
-      const collection = db.collection('documents');
       
-      // Make sure to include a valid date
-      const result = await collection.insertOne({
-        content: req.body.content,
-        createdAt: new Date().toISOString(),  // Store as ISO string for consistency
-        title: req.body.title || 'Untitled Document'
+      // First create the main document
+      const documentsCollection = db.collection('documents');
+      const result = await documentsCollection.insertOne({
+        title,
+        content,
+        vectorId: `vec_${Date.now()}`,
+        uploadedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
       });
+
+      // Create and store chunks
+      const chunks = chunkDocument(content, result.insertedId.toString(), title);
+      const vectorizedChunks = await vectorizeChunks(chunks);
+      
+      // Store chunks in document_chunks collection
+      const chunksCollection = db.collection('document_chunks');
+      await chunksCollection.insertMany(vectorizedChunks);
+
+      log(`✅ Created ${vectorizedChunks.length} vectorized chunks for document ${result.insertedId}`);
 
       res.json({ 
         success: true, 
         documentId: result.insertedId,
+        chunksCount: vectorizedChunks.length,
         document: {
           id: result.insertedId,
-          content: req.body.content,
-          createdAt: new Date().toISOString(),
-          title: req.body.title || 'Untitled Document'
+          title,
+          content,
+          vectorId: `vec_${Date.now()}`,
+          uploadedAt: new Date().toISOString()
         }
       });
-      
     } catch (error) {
       log('❌ Error uploading document:', error instanceof Error ? error.message : String(error));
       res.status(500).json({ error: 'Failed to upload document' });
@@ -138,52 +142,64 @@ export async function registerRoutes(app: Express) {
   app.post("/api/chat", async (req, res) => {
     try {
       const { question } = req.body;
-      
-      // Check question for PII
-      // await detectPII(question);
-      
       const db = await getDB();
-      const collection = db.collection('documents');
       
-      // Fetch documents from MongoDB
-      const documents = await collection.find({}).toArray();
+      // First check if we have any documents
+      const documentsCollection = db.collection('documents');
+      const documents = await documentsCollection.find({}).toArray();
       
-      // Create a context string from the documents
-      const context = documents.map(doc => doc.content).join('\n\n');
+      if (documents.length === 0) {
+        return res.json({
+          answer: "No documents have been uploaded yet.",
+          context: []
+        });
+      }
 
-      // Update the prompt to include the context
+      // Get relevant content using vector similarity
+      const questionEmbedding = await generateEmbedding(question);
+      const chunksCollection = db.collection('document_chunks');
+      const chunks = await chunksCollection.find({}).toArray();
+      let context;
+      if (chunks.length > 0) {
+        const rankedChunks = chunks
+          .map(chunk => ({
+            ...chunk as unknown as VectorizedChunk,
+            similarity: cosineSimilarity(questionEmbedding, chunk.embedding)
+          }))
+          .sort((a, b) => b.similarity - a.similarity)
+          .slice(0, 3);  // Take top 3 most similar chunks
+
+        context = rankedChunks
+          .map(chunk => chunk.content)
+          .join('\n\n');
+      } else {
+        // Fallback to using full documents if no chunks
+        context = documents
+          .map(doc => doc.content)
+          .join('\n\n');
+      }
+
+      // Call Bedrock with better prompt
       const bedrockParams = {
         modelId: "anthropic.claude-v2",
         contentType: "application/json",
         accept: "application/json",
         body: JSON.stringify({
-          prompt: `\n\nHuman: You are a helpful assistant that helps a human finding whatever information that they ask you for in your database. You are adept at breakinf down and explaining code files and have context to entire repositories and business logic as well for software engineers. You must never reveal any PII data. If a user has PII data in their question, you must ask them to remove it before you can answer. If you recognize PII data in the documents, you must ask the user to remove it or fake it. The human has uploaded documents to you to centralize their information and find it faster without having to search through all the documents. Your job is to answer the question based on the documents in your database. If the answer is not in the documents, then say so without revealing the contents of the document. Here are some documents to reference:\n\n${context}\n\nBased on the above documents, please answer this question: ${question}\n\nAssistant: `,
+          prompt: `\n\nHuman: You are a helpful AI assistant. You have access to code and configuration files. When asked about code, explain what it does clearly and technically. When asked about configuration values, you can describe their purpose but should not reveal exact values. Here are the relevant documents:\n\n${context}\n\nBased on these documents, please answer this question: ${question}\n\nAssistant: `,
           max_tokens_to_sample: 2000,
           temperature: 0.7,
-          top_p: 1,
-          stop_sequences: ["\n\nHuman:"]
         })
       };
 
-      // Call Bedrock
-      const response = await bedrock.send(
-        new InvokeModelCommand(bedrockParams)
-      );
+      const response = await bedrock.send(new InvokeModelCommand(bedrockParams));
+      const answer = JSON.parse(new TextDecoder().decode(response.body)).completion;
 
-      const responseBody = JSON.parse(new TextDecoder().decode(response.body));
-      const answer = responseBody.completion;
-
-      // Get chat collection
-      const chatsCollection = db.collection('chats');
-      
-      // Create chat document
-      const chatDoc = {
+      // Store chat with context info
+      const result = await db.collection('chats').insertOne({
         question,
         answer,
         createdAt: new Date()
-      };
-      
-      const result = await chatsCollection.insertOne(chatDoc);
+      });
 
       return res.json({
         id: result.insertedId.toString(),
@@ -193,17 +209,34 @@ export async function registerRoutes(app: Express) {
       });
 
     } catch (error) {
-      log('❌ Chat error:', error instanceof Error ? error.message : String(error));
-      res.status(500).json({ 
-        error: 'Failed to process chat',
-        details: error instanceof Error ? error.message : String(error)
-      });
+      console.error('Chat error:', error);
+      res.status(500).json({ error: 'Failed to process chat' });
     }
   });
 
   app.get("/api/chats", async (_req, res) => {
     const chats = await storage.getChats();
     res.json(chats);
+  });
+
+  // Test endpoint for vector search
+  app.post("/api/test-vectors", async (req, res) => {
+    try {
+      const { question } = req.body;
+      const questionEmbedding = await generateEmbedding(question);
+      const db = await getDB();
+      const chunks = await db.collection('document_chunks').find({}).toArray();
+      
+      // Cast chunks to VectorizedChunk type since we know the structure matches
+      const results = testSimilarity(questionEmbedding, chunks as unknown as VectorizedChunk[]);
+      res.json({
+        questionEmbedding: questionEmbedding.slice(0, 5),
+        totalChunks: chunks.length,
+        topResults: results.slice(0, 5)
+      });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
   });
 
   // Catch-all route to serve the frontend for any non-API routes
