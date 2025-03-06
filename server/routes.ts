@@ -12,6 +12,7 @@ import { getDB } from './connectToDB.js';
 import { log } from './vite.js';  // Import the logger
 import { z } from 'zod';
 import { ObjectId } from 'mongodb';  // Add this import
+import { detectPII } from './utils/piiDetection.js';
 
 dotenv.config();
 
@@ -51,6 +52,9 @@ export async function registerRoutes(app: Express) {
   // Document routes
   app.post("/api/documents", async (req, res) => {
     try {
+      // Check for PII before processing
+      // await detectPII(req.body.content);
+      
       // Log the incoming request body
       log('📝 Received document data:', req.body);
 
@@ -134,8 +138,10 @@ export async function registerRoutes(app: Express) {
   app.post("/api/chat", async (req, res) => {
     try {
       const { question } = req.body;
-      log('❓ Question:', question);
-
+      
+      // Check question for PII
+      // await detectPII(question);
+      
       const db = await getDB();
       const collection = db.collection('documents');
       
@@ -151,7 +157,7 @@ export async function registerRoutes(app: Express) {
         contentType: "application/json",
         accept: "application/json",
         body: JSON.stringify({
-          prompt: `\n\nHuman: You are a helpful assistant that helps a human finding whatever information that they ask you for in your database. The human has uploaded documents to you to centralize their information and find it faster without having to search through all the documents. Your job is to answer the question based on the documents in your database. If the answer is not in the documents, then say so without revealing the contents of the document. Here are some documents to reference:\n\n${context}\n\nBased on the above documents, please answer this question: ${question}\n\nAssistant: `,
+          prompt: `\n\nHuman: You are a helpful assistant that helps a human finding whatever information that they ask you for in your database. You are adept at breakinf down and explaining code files and have context to entire repositories and business logic as well for software engineers. You must never reveal any PII data. If a user has PII data in their question, you must ask them to remove it before you can answer. If you recognize PII data in the documents, you must ask the user to remove it or fake it. The human has uploaded documents to you to centralize their information and find it faster without having to search through all the documents. Your job is to answer the question based on the documents in your database. If the answer is not in the documents, then say so without revealing the contents of the document. Here are some documents to reference:\n\n${context}\n\nBased on the above documents, please answer this question: ${question}\n\nAssistant: `,
           max_tokens_to_sample: 2000,
           temperature: 0.7,
           top_p: 1,
