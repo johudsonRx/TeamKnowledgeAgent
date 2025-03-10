@@ -1,3 +1,5 @@
+import { log } from '../vite.js';
+
 interface Chunk {
   content: string;
   metadata: {
@@ -16,6 +18,15 @@ export function chunkDocument(
   maxChunkSize = 1000,
   overlap = 100
 ): Chunk[] {
+  // Add debug logging
+  log(`Chunking document: ${title}`);
+  log(`Content length: ${content.length}`);
+
+  // Check for special characters or encoding issues
+  if (content.includes('\ufffd')) {
+    log('⚠️ Document contains invalid UTF-8 characters');
+  }
+
   const chunks: Chunk[] = [];
   const fileType = title.split('.').pop() || '';
   
@@ -44,6 +55,20 @@ export function chunkDocument(
         currentChunk += boundary;
       }
     }
+
+    // Add the final chunk if there's remaining content
+    if (currentChunk) {
+      chunks.push({
+        content: currentChunk,
+        metadata: {
+          documentId,
+          startIndex,
+          endIndex: startIndex + currentChunk.length,
+          title,
+          fileType
+        }
+      });
+    }
   } else {
     // For text files, chunk by paragraphs or sentences
     let currentPosition = 0;
@@ -69,5 +94,20 @@ export function chunkDocument(
     }
   }
 
+  // If no chunks were created (file too small), create a single chunk
+  if (chunks.length === 0) {
+    chunks.push({
+      content: content,
+      metadata: {
+        documentId,
+        startIndex: 0,
+        endIndex: content.length,
+        title,
+        fileType
+      }
+    });
+  }
+
+  log(`Created ${chunks.length} chunks for ${title}`);
   return chunks;
 } 

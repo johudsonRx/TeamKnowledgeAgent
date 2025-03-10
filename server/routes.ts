@@ -55,6 +55,14 @@ export async function registerRoutes(app: Express) {
   app.post("/api/documents", async (req, res) => {
     try {
       const { content, title } = req.body;
+      
+      // Add validation and logging
+      if (!content || content.trim() === '') {
+        log('❌ Empty content received');
+        return res.status(400).json({ error: 'Document content cannot be empty' });
+      }
+      
+      log(`📝 Processing document "${title}" with ${content.length} characters`);
       const db = await getDB();
       
       // First create the main document
@@ -112,20 +120,25 @@ export async function registerRoutes(app: Express) {
     try {
       const documentId = req.params.id;
       
-      // Validate that we have a document ID
-      if (!documentId) {
-        return res.status(400).json({ error: 'Document ID is required' });
-      }
-      
-      // Validate that the ID is a valid ObjectId
-      if (!ObjectId.isValid(documentId)) {
-        return res.status(400).json({ error: 'Invalid document ID format' });
+      if (!documentId || !ObjectId.isValid(documentId)) {
+        return res.status(400).json({ error: 'Invalid document ID' });
       }
 
       const db = await getDB();
-      const collection = db.collection('documents');
       
-      const result = await collection.deleteOne({ _id: new ObjectId(documentId) });
+      // Delete the document
+      const documentsCollection = db.collection('documents');
+      const result = await documentsCollection.deleteOne({ 
+        _id: new ObjectId(documentId) 
+      });
+      
+      // Also delete associated chunks
+      const chunksCollection = db.collection('document_chunks');
+      await chunksCollection.deleteMany({ 
+        'metadata.documentId': documentId 
+      });
+
+      log(`🗑️ Deleted document ${documentId} and its chunks`);
       
       if (result.deletedCount === 0) {
         return res.status(404).json({ error: 'Document not found' });
@@ -133,7 +146,7 @@ export async function registerRoutes(app: Express) {
       
       res.json({ success: true });
     } catch (error) {
-      console.error('Delete error:', error);
+      log('❌ Delete error:', error);
       res.status(500).json({ error: 'Failed to delete document' });
     }
   });
@@ -149,9 +162,17 @@ export async function registerRoutes(app: Express) {
       const documents = await documentsCollection.find({}).toArray();
       
       if (documents.length === 0) {
-        return res.json({
+        const result = await db.collection('chats').insertOne({
+          question,
           answer: "No documents have been uploaded yet.",
-          context: []
+          createdAt: new Date()
+        });
+
+        return res.json({
+          id: result.insertedId.toString(),
+          question,
+          answer: "No documents have been uploaded yet.",
+          createdAt: new Date()
         });
       }
 
@@ -215,7 +236,7 @@ export async function registerRoutes(app: Express) {
   });
 
   app.get("/api/chats", async (_req, res) => {
-    const chats = await storage.getChats();
+    const chats = await storage.getChats();  // This might be caching old data
     res.json(chats);
   });
 
