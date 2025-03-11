@@ -10,7 +10,7 @@ const SUPPORTED_EXTENSIONS = [
   'py', 'js', 'ts', 'jsx', 'tsx',
   'go', 'rs', 'java', 'cpp', 'c',
   'yaml', 'yml', 'json', 'sh', 'md',
-  'txt'
+  'txt', 'pptx', 'ppt'
 ];
 
 export default function DocumentUpload() {

@@ -1,3 +1,4 @@
+
 interface ProcessedDocument {
   textContent: string;
   structure?: any;
@@ -15,6 +16,8 @@ export async function processDocument(content: string, type: string): Promise<Pr
       return processCode(content);
     case 'TEXT':
       return processText(content);
+    // case 'PPTX':
+    //   return processPowerPoint(content);
     default:
       return {
         textContent: content
@@ -57,4 +60,22 @@ function processPDF(content: string): ProcessedDocument {
       characters: content.length
     }
   };
-} 
+}
+
+// async function processPowerPoint(buffer: Buffer): Promise<ProcessedDocument> {
+//   // Extract text from PowerPoint
+//   const extractedText = await extractTextFromPPTX(buffer);
+  
+//   // Process slides
+//   const slides = extractedText.slides.map((slide, index) => {
+//     return `Slide ${index + 1}: ${slide.title}\n${slide.content}`;
+//   });
+  
+//   return {
+//     textContent: slides.join('\n\n'),
+//     structure: {
+//       slideCount: slides.length,
+//       hasNotes: extractedText.hasNotes
+//     }
+//   };
+// } 

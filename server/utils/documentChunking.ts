@@ -69,6 +69,24 @@ export function chunkDocument(
         }
       });
     }
+  } else if (['pptx', 'ppt'].includes(fileType)) {
+    // Split by slides (already marked in the text)
+    const slides = content.split(/Slide \d+:/);
+    
+    for (const slide of slides) {
+      if (!slide.trim()) continue;
+      
+      chunks.push({
+        content: slide,
+        metadata: {
+          documentId,
+          startIndex: content.indexOf(slide),
+          endIndex: content.indexOf(slide) + slide.length,
+          title,
+          fileType
+        }
+      });
+    }
   } else {
     // For text files, chunk by paragraphs or sentences
     let currentPosition = 0;
