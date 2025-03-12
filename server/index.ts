@@ -3,6 +3,7 @@ import { registerRoutes } from "./routes.js";
 import { setupVite, serveStatic, log } from "./vite.js";
 import dotenv from 'dotenv';
 import { getDB } from "./connectToDB.js";
+import { createServer } from 'http';
 dotenv.config();
 
 const app = express();
@@ -63,11 +64,24 @@ app.use((req, res, next) => {
     serveStatic(app);
   }
 
-    // ALWAYS serve the app on port 5000
-    // this serves both the API and the client
-    app.listen(6000, '0.0.0.0', () => {
-      console.log('Server running on http://0.0.0.0:6000');
-    });
+    // Try different ports if the default is in use
+    function startServer(port = 6000) {
+      try {
+        const server = createServer(app);
+        server.listen(port, '0.0.0.0', () => {
+          console.log(`Server running on http://0.0.0.0:${port}`);
+        });
+      } catch (error) {
+        if (error.code === 'EADDRINUSE') {
+          console.log(`Port ${port} is busy, trying ${port + 1}...`);
+          startServer(port + 1);
+        } else {
+          console.error('Failed to start server:', error);
+        }
+      }
+    }
+
+    startServer();
   } catch (error) {
     console.error('Failed to start server:', error);
     process.exit(1);

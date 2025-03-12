@@ -20,28 +20,36 @@ export default function DocumentUpload() {
 
   const uploadMutation = useMutation({
     mutationFn: async (file: File) => {
-      const content = await file.text();
+      let content;
+      const fileType = file.name.split('.').pop()?.toLowerCase() || '';
       
-      // Client-side warning
-      const warningMessage = `
-        Please ensure your document does not contain:
-        - Email addresses
-        - Phone numbers
-        - Social Security numbers
-        - Personal addresses
-        - Financial information
-      `;
-      
-      if (!window.confirm(warningMessage)) {
-        return;
+      // Handle binary files differently
+      if (['pptx', 'ppt', 'pdf'].includes(fileType)) {
+        // For binary files, we'll use FormData to upload
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('title', file.name);
+        formData.append('type', fileType.toUpperCase());
+        
+        const res = await fetch('/api/documents/upload', {
+          method: 'POST',
+          body: formData
+        });
+        
+        return res.json() as Promise<Document>;
+      } else {
+        // For text files, continue with the existing approach
+        content = await file.text();
+        
+        const res = await apiRequest("POST", "/api/documents", {
+          title: file.name,
+          content,
+          vectorId: "temp-" + Date.now(),
+          type: fileType.toUpperCase()
+        });
+        
+        return res.json() as Promise<Document>;
       }
-      
-      const res = await apiRequest("POST", "/api/documents", {
-        title: file.name,
-        content,
-        vectorId: "temp-" + Date.now(), // In a real app, this would be from embedding
-      });
-      return res.json() as Promise<Document>;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
