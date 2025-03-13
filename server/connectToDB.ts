@@ -1,70 +1,36 @@
-import { MongoClient, MongoClientOptions } from 'mongodb';
+import { Pool } from 'pg';
 import dotenv from 'dotenv';
-import fs from 'fs';
-import { log } from './vite.js';  // Add this import
+import { log } from './vite.js';
 dotenv.config();
 
-let client: MongoClient | null = null;
+// Create a connection pool
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/knowledge_base',
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined
+});
 
-// Debug logging
+// Log connection info
 log(`🔧 Environment Check:
   NODE_ENV: ${process.env.NODE_ENV}
   isProd: ${process.env.NODE_ENV && process.env.NODE_ENV.toLowerCase() === 'production'}
-  MONGODB_URI: ${process.env.MONGODB_URI ? '[CONFIGURED]' : '[NOT SET]'}
-  Type of NODE_ENV: ${typeof process.env.NODE_ENV}
+  DATABASE_URL: ${process.env.DATABASE_URL ? '[CONFIGURED]' : '[NOT SET]'}
 `);
 
-const isProd = process.env.NODE_ENV && 
-  process.env.NODE_ENV.toLowerCase() === 'production';
-const connectionString = isProd 
-  ? process.env.MONGODB_URI 
-  : 'mongodb://127.0.0.1:27017/knowledge-base';
-
-if (!connectionString) {
-  throw new Error('MONGODB_URI is required in production');
-}
-
-export async function getMongoClient() {
-  if (isProd && !process.env.MONGODB_URI) {
-    throw new Error('MONGODB_URI not defined in production');
+// Test the connection
+pool.query('SELECT NOW()', (err, res) => {
+  if (err) {
+    log('❌ Database connection error:', err);
+  } else {
+    log(`✅ Connected to PostgreSQL at ${res.rows[0].now}`);
   }
-
-  // Configure options based on environment
-  const options: MongoClientOptions = isProd 
-    ? {
-        tls: true,
-        tlsCAFile: '/app/global-bundle.pem',
-        retryWrites: false
-      }
-    : {
-        serverSelectionTimeoutMS: 5000,
-        family: 4,  // Force IPv4
-        directConnection: true  // Connect directly to the server
-          // Local development options (if any needed)
-      };
-
-  const client = new MongoClient(connectionString!, options);
-
-  try {
-    await client.connect();
-    console.log(`Connected to MongoDB in ${isProd ? 'production' : 'development'} mode`);
-    return client;
-  } catch (error) {
-    console.error('MongoDB connection error:', error);
-    throw error;
-  }
-}
+});
 
 export async function getDB() {
-  const client = await getMongoClient();
-  return client.db('knowledge-base');
+  return pool;
 }
 
 export async function closeConnection() {
-  if (client) {
-    await client.close();
-    client = null;
-  }
+  await pool.end();
 }
 
 // Handle application shutdown
@@ -73,25 +39,45 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-export async function getDocuments() {
-  if (!process.env.MONGODB_URI) {
-    throw new Error('MongoDB connection string is not defined');
-  }
-
+// Initialize database tables
+export async function initDB() {
   try {
-    const client = new MongoClient(process.env.MONGODB_URI);
-    await client.connect();
-    
-    const db = client.db('knowledge-base');
-    const collection = db.collection('documents');
-    
-    const documents = await collection.find({}).toArray();
-    
-    await client.close();
-    return documents;
-    
+    // Create documents table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS documents (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        vector_id TEXT NOT NULL,
+        uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create document_chunks table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS document_chunks (
+        id SERIAL PRIMARY KEY,
+        content TEXT NOT NULL,
+        embedding JSONB NOT NULL,
+        metadata JSONB NOT NULL,
+        document_id INTEGER REFERENCES documents(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Create chats table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chats (
+        id SERIAL PRIMARY KEY,
+        question TEXT NOT NULL,
+        answer TEXT NOT NULL,
+        context JSONB,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    log('✅ Database tables initialized');
   } catch (error) {
-    console.error('Error fetching documents from MongoDB:', error);
+    log('❌ Error initializing database:', error);
     throw error;
   }
 } 

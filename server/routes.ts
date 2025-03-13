@@ -1,6 +1,5 @@
 import type { Express } from "express";
 import { createServer } from "http";
-import { storage } from "./storage/index.js";
 import { insertDocumentSchema, insertChatSchema } from "../shared/schema.js";
 import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 import path from "path";
@@ -8,12 +7,21 @@ import express from "express";
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import dotenv from 'dotenv';
-import { getDB } from './connectToDB.js';
-import { log } from './vite.js';  // Import the logger
+import { getDB, initDB } from './connectToDB.js';
+import { log } from './vite.js';
 import { z } from 'zod';
-import { ObjectId } from 'mongodb';  // Add this import
+import multer from 'multer';
+import { processDocument } from './utils/documentProcessor.js';
+import { chunkDocument } from './utils/documentChunking.js';
+import { vectorizeChunks } from './utils/vectorization.js';
 
 dotenv.config();
+
+// Configure multer for file uploads
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+});
 
 const bedrock = new BedrockRuntimeClient({ 
   region: process.env.AWS_REGION || "us-east-1",
@@ -45,6 +53,9 @@ const chatResponseSchema = z.object({
 });
 
 export async function registerRoutes(app: Express) {
+  // Initialize database
+  await initDB();
+
   // Serve static files from the client build directory
   app.use(express.static(path.join(__dirname, "../client/dist")));
 
@@ -60,24 +71,44 @@ export async function registerRoutes(app: Express) {
         return res.status(400).json({ error: 'Invalid document data' });
       }
 
+      const { title, content, vectorId } = req.body;
       const db = await getDB();
-      const collection = db.collection('documents');
       
-      // Make sure to include a valid date
-      const result = await collection.insertOne({
-        content: req.body.content,
-        createdAt: new Date().toISOString(),  // Store as ISO string for consistency
-        title: req.body.title || 'Untitled Document'
-      });
+      // Insert document into PostgreSQL
+      const result = await db.query(
+        'INSERT INTO documents (title, content, vector_id) VALUES ($1, $2, $3) RETURNING *',
+        [title || 'Untitled Document', content, vectorId || `vec_${Date.now()}`]
+      );
+      
+      const document = result.rows[0];
+      
+      // Create and store chunks
+      const chunks = chunkDocument(content, document.id.toString(), title);
+      const vectorizedChunks = await vectorizeChunks(chunks);
+      
+      // Store chunks in document_chunks table
+      for (const chunk of vectorizedChunks) {
+        await db.query(
+          'INSERT INTO document_chunks (content, embedding, metadata, document_id) VALUES ($1, $2, $3, $4)',
+          [
+            chunk.content, 
+            JSON.stringify(chunk.embedding), 
+            JSON.stringify(chunk.metadata),
+            document.id
+          ]
+        );
+      }
+
+      log(`✅ Created ${vectorizedChunks.length} vectorized chunks for document ${document.id}`);
 
       res.json({ 
         success: true, 
-        documentId: result.insertedId,
+        documentId: document.id,
         document: {
-          id: result.insertedId,
-          content: req.body.content,
-          createdAt: new Date().toISOString(),
-          title: req.body.title || 'Untitled Document'
+          id: document.id,
+          content: document.content,
+          createdAt: document.uploaded_at,
+          title: document.title
         }
       });
       
@@ -90,10 +121,9 @@ export async function registerRoutes(app: Express) {
   app.get("/api/documents", async (req, res) => {
     try {
       const db = await getDB();
-      const collection = db.collection('documents');
-      const documents = await collection.find({}).toArray();
-      log(`📚 Retrieved ${documents.length} documents`);
-      res.json(documents);
+      const result = await db.query('SELECT * FROM documents ORDER BY uploaded_at DESC');
+      log(`📚 Retrieved ${result.rows.length} documents`);
+      res.json(result.rows);
     } catch (error) {
       log('❌ Error fetching documents:', error instanceof Error ? error.message : String(error));
       res.status(500).json({ error: 'Failed to fetch documents' });
@@ -109,24 +139,80 @@ export async function registerRoutes(app: Express) {
         return res.status(400).json({ error: 'Document ID is required' });
       }
       
-      // Validate that the ID is a valid ObjectId
-      if (!ObjectId.isValid(documentId)) {
-        return res.status(400).json({ error: 'Invalid document ID format' });
-      }
-
       const db = await getDB();
-      const collection = db.collection('documents');
       
-      const result = await collection.deleteOne({ _id: new ObjectId(documentId) });
+      // Delete document (chunks will be deleted via CASCADE)
+      const result = await db.query('DELETE FROM documents WHERE id = $1 RETURNING id', [documentId]);
       
-      if (result.deletedCount === 0) {
+      if (result.rowCount === 0) {
         return res.status(404).json({ error: 'Document not found' });
       }
       
       res.json({ success: true });
     } catch (error) {
-      console.error('Delete error:', error);
+      log('❌ Delete error:', error);
       res.status(500).json({ error: 'Failed to delete document' });
+    }
+  });
+
+  // Binary file upload route
+  app.post("/api/documents/upload", upload.single('file'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+      }
+      
+      const { title, type } = req.body;
+      const buffer = req.file.buffer;
+      
+      log(`📝 Processing ${type} document "${title}" with ${buffer.length} bytes`);
+      
+      // Process the document based on type
+      const processedDoc = await processDocument(buffer, type);
+      
+      // Create the document in the database
+      const db = await getDB();
+      const result = await db.query(
+        'INSERT INTO documents (title, content, vector_id) VALUES ($1, $2, $3) RETURNING *',
+        [title, processedDoc.textContent, `vec_${Date.now()}`]
+      );
+      
+      const document = result.rows[0];
+
+      // Create and store chunks
+      const chunks = chunkDocument(processedDoc.textContent, document.id.toString(), title);
+      const vectorizedChunks = await vectorizeChunks(chunks);
+      
+      // Store chunks in document_chunks table
+      for (const chunk of vectorizedChunks) {
+        await db.query(
+          'INSERT INTO document_chunks (content, embedding, metadata, document_id) VALUES ($1, $2, $3, $4)',
+          [
+            chunk.content, 
+            JSON.stringify(chunk.embedding), 
+            JSON.stringify(chunk.metadata),
+            document.id
+          ]
+        );
+      }
+
+      log(`✅ Created ${vectorizedChunks.length} vectorized chunks for document ${document.id}`);
+
+      res.json({ 
+        success: true, 
+        documentId: document.id,
+        chunksCount: vectorizedChunks.length,
+        document: {
+          id: document.id,
+          title,
+          content: processedDoc.textContent,
+          vectorId: `vec_${Date.now()}`,
+          uploadedAt: document.uploaded_at
+        }
+      });
+    } catch (error) {
+      log('❌ Error uploading document:', error instanceof Error ? error.message : String(error));
+      res.status(500).json({ error: 'Failed to upload document' });
     }
   });
 
@@ -137,25 +223,66 @@ export async function registerRoutes(app: Express) {
       log('❓ Question:', question);
 
       const db = await getDB();
-      const collection = db.collection('documents');
       
-      // Fetch documents from MongoDB
-      const documents = await collection.find({}).toArray();
+      // First check if we have any documents
+      const documentsResult = await db.query('SELECT COUNT(*) FROM documents');
+      const documentCount = parseInt(documentsResult.rows[0].count);
       
-      // Create a context string from the documents
-      const context = documents.map(doc => doc.content).join('\n\n');
+      if (documentCount === 0) {
+        // Store the "no documents" response in the chats collection
+        const chatResult = await db.query(
+          'INSERT INTO chats (question, answer, created_at) VALUES ($1, $2, NOW()) RETURNING *',
+          [question, "No documents have been uploaded yet."]
+        );
+        
+        return res.json({
+          id: chatResult.rows[0].id,
+          question,
+          answer: "No documents have been uploaded yet.",
+          createdAt: chatResult.rows[0].created_at
+        });
+      }
 
-      // Update the prompt to include the context
+      // Get relevant content using vector similarity
+      const questionEmbedding = await generateEmbedding(question);
+      
+      // Get all chunks
+      const chunksResult = await db.query('SELECT * FROM document_chunks');
+      const chunks = chunksResult.rows;
+      
+      let context;
+      if (chunks.length > 0) {
+        // Calculate similarity for each chunk
+        const rankedChunks = chunks
+          .map(chunk => ({
+            ...chunk,
+            embedding: JSON.parse(chunk.embedding),
+            metadata: JSON.parse(chunk.metadata),
+            similarity: cosineSimilarity(questionEmbedding, JSON.parse(chunk.embedding))
+          }))
+          .sort((a, b) => b.similarity - a.similarity)
+          .slice(0, 3);  // Take top 3 most similar chunks
+
+        context = rankedChunks
+          .map(chunk => chunk.content)
+          .join('\n\n');
+      } else {
+        // Fallback to using full documents if no chunks
+        const docsResult = await db.query('SELECT content FROM documents');
+        context = docsResult.rows
+          .map(doc => doc.content)
+          .join('\n\n');
+      }
+
+      // Call Bedrock with better prompt
       const bedrockParams = {
         modelId: "anthropic.claude-v2",
         contentType: "application/json",
         accept: "application/json",
         body: JSON.stringify({
-          prompt: `\n\nHuman: You are a helpful assistant that helps a human finding whatever information that they ask you for in your database. The human has uploaded documents to you to centralize their information and find it faster without having to search through all the documents. Your job is to answer the question based on the documents in your database. If the answer is not in the documents, then say so without revealing the contents of the document. Here are some documents to reference:\n\n${context}\n\nBased on the above documents, please answer this question: ${question}\n\nAssistant: `,
+          prompt: `\n\nHuman: You are a helpful AI assistant. You have access to code and configuration files. When asked about code, explain what it does clearly and technically. When asked about configuration values, you can describe their purpose but should not reveal exact values. If you do not have the information, say so, do not make up information. Also, if you do not have the information, do not reference another document that is in your database, just say that none of your knowledge base has the information. Here are the relevant documents:\n\n${context}\n\nBased on these documents, please answer this question: ${question}\n\nAssistant: `,
           max_tokens_to_sample: 2000,
           temperature: 0.7,
-          top_p: 1,
-          stop_sequences: ["\n\nHuman:"]
         })
       };
 
@@ -167,23 +294,19 @@ export async function registerRoutes(app: Express) {
       const responseBody = JSON.parse(new TextDecoder().decode(response.body));
       const answer = responseBody.completion;
 
-      // Get chat collection
-      const chatsCollection = db.collection('chats');
+      // Store chat in PostgreSQL
+      const chatResult = await db.query(
+        'INSERT INTO chats (question, answer, created_at) VALUES ($1, $2, NOW()) RETURNING *',
+        [question, answer]
+      );
       
-      // Create chat document
-      const chatDoc = {
-        question,
-        answer,
-        createdAt: new Date()
-      };
-      
-      const result = await chatsCollection.insertOne(chatDoc);
+      const chat = chatResult.rows[0];
 
       return res.json({
-        id: result.insertedId.toString(),
+        id: chat.id,
         question,
         answer,
-        createdAt: new Date()
+        createdAt: chat.created_at
       });
 
     } catch (error) {
@@ -196,8 +319,14 @@ export async function registerRoutes(app: Express) {
   });
 
   app.get("/api/chats", async (_req, res) => {
-    const chats = await storage.getChats();
-    res.json(chats);
+    try {
+      const db = await getDB();
+      const result = await db.query('SELECT * FROM chats ORDER BY created_at DESC');
+      res.json(result.rows);
+    } catch (error) {
+      log('❌ Error fetching chats:', error);
+      res.status(500).json({ error: 'Failed to fetch chats' });
+    }
   });
 
   // Catch-all route to serve the frontend for any non-API routes
@@ -207,4 +336,28 @@ export async function registerRoutes(app: Express) {
 
   const httpServer = createServer(app);
   return httpServer;
+}
+
+// Helper function for generating embeddings
+async function generateEmbedding(text: string): Promise<number[]> {
+  const params = {
+    modelId: "amazon.titan-embed-text-v1",
+    contentType: "application/json",
+    accept: "application/json",
+    body: JSON.stringify({
+      inputText: text
+    })
+  };
+
+  const response = await bedrock.send(new InvokeModelCommand(params));
+  const embedding = JSON.parse(new TextDecoder().decode(response.body)).embedding;
+  return embedding;
+}
+
+// Cosine similarity for vector search
+function cosineSimilarity(vecA: number[], vecB: number[]): number {
+  const dotProduct = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0);
+  const normA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0));
+  const normB = Math.sqrt(vecB.reduce((sum, b) => sum + b * b, 0));
+  return dotProduct / (normA * normB);
 }
